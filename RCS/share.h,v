@@ -1,0 +1,53 @@
+head	1.1;
+access;
+symbols;
+locks
+	o1-sangha:1.1; strict;
+comment	@ * @;
+
+
+1.1
+date	2016.10.20.20.35.00;	author o1-sangha;	state Exp;
+branches;
+next	;
+
+
+desc
+@First time forgot to back up opps
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@#ifndef SHARE_H
+#define SHARE_H
+
+typedef struct Clock
+{
+  int nanoSec; // nanoseconds will count up to 1000000000
+  int second; 
+}clock_share;
+
+#define MSGSZ     500
+typedef struct msgbuf //I am using the smae typedef from the website in README
+{
+  long    mtype;
+  char    mtext[MSGSZ];
+} message_buf;
+
+typedef struct Queue
+{
+  char     stype;
+  int      dieFlag;  // 0 will be sent if user has not reached death time
+                 // 1 will be sent if the slave has eached death time and wishes to die
+  pid_t    myPid;
+  clock_share   death_Time;
+
+} msgQueue;
+
+
+#endif
+@

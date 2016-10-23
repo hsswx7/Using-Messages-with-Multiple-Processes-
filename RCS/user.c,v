@@ -1,0 +1,208 @@
+head	1.2;
+access;
+symbols;
+locks; strict;
+comment	@ * @;
+
+
+1.2
+date	2016.10.20.00.11.52;	author o1-sangha;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2016.10.16.01.37.13;	author o1-sangha;	state Exp;
+branches;
+next	;
+
+
+desc
+@this is copied over slave.c
+@
+
+
+1.2
+log
+@Back up
+@
+text
+@#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <getopt.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <time.h>
+#include <signal.h>
+#include <error.h>
+#include <assert.h>
+#include <sys/msg.h>
+#include "share.h"
+
+
+void INThandler(int sig); // for the ctrl^C
+void TimeHandler(int sig); // for alarm (z)
+int random_number(int min_num, int max_num);
+void releaseMem(); //detaching for shared memory
+
+clock_share *ossClock;
+message_buf message;
+size_t buf_length;
+
+int shareID;
+int critMsgID;
+int dieMsgID;
+
+int main(int argc, char *argv[])
+{
+  signal(SIGTERM, TimeHandler); // getting is alarm is activated
+  signal(SIGQUIT,INThandler); //getting if ctrl^c called
+  signal(SIGINT, INThandler); 
+  
+  key_t key = atoi(argv[0]); // making key for access 
+  key_t dieMsgKey = atoi(argv[1]); // Key for the messages
+  key_t criticalMsgKey = atoi(argv[2]);  //Key for the children to have a critical section
+  
+  if((shareID = shmget(key, sizeof(ossClock),0666)) < 0)  //attaching to shared memeory 
+  {
+    perror("shmget in parent");
+    exit(1);
+  }
+  ossClock = (clock_share*)shmat(shareID, (void *)0, 0);
+  int startTime = ossClock->nanoSec;
+  int life = random_number(1,1000000);
+  int checkLife = life + startTime;
+  printf("User %d | Check Life %d\n", getpid(), checkLife);
+  
+  if ((critMsgID = msgget(criticalMsgKey, 0666)) < 0) //For mutual exlusion queue
+  {
+	  perror("Error in msgeet Master ");
+	  exit(1);
+  }
+  
+  if ((dieMsgID = msgget(dieMsgKey, 0666)) < 0) //user die queue
+  {
+    perror("Error in msgeet Master ");
+	exit(1);
+  }
+  
+    message_buf critMsg; // the message from the crit section
+
+	while(1)
+	{
+		msgrcv(critMsgID, &critMsg, sizeof(critMsg), 0, 0); // waiting for the critical section
+        
+		printf("User %d |Enter critical Section\n", getpid());
+		if(ossClock->nanoSec >= abs(checkLife)) //if my time is up
+		{
+            printf("User %d | Check Life %d | Dead Now\n", getpid(),abs(checkLife));
+			printf("User %d | OSS Clock  %d.%010d\n", getpid(),ossClock->second,ossClock->nanoSec);
+			msgsnd(critMsgID, &critMsg, sizeof(critMsg), 0);
+			exit(1);
+		}
+		else
+		{
+		   printf("User %d | Not going to die\n", getpid());
+           msgsnd(critMsgID, &critMsg, sizeof(critMsg), 0);
+		}
+		printf("User %d | exiting Critial section\n", getpid());
+	}
+  
+  
+  
+  return 0;
+}
+
+void INThandler(int sig)
+{ 
+  signal(sig, SIG_IGN); // ignoring any signal passed to the INThandler
+  fprintf(stderr, "\nCtrl^C Called, Process Exiting\n");
+  releaseMem();
+
+  kill(getpid(), SIGKILL);
+}
+void TimeHandler(int sig)
+{
+  releaseMem();
+  //shmctl(shmid, IPC_RMID, NULL); //mark shared memory for deletion
+  fprintf(stderr, "\nOut of Time, Process %d Exiting\n", getpid());
+  kill(getpid(), SIGKILL);
+  //exit(0);
+}
+int random_number(int min_num, int max_num)
+{
+  int result =0,low_num=0,hi_num=0;
+  if(min_num < max_num)
+  {
+    low_num=min_num;
+    hi_num=max_num+1;
+  }
+  else
+  {
+    low_num=max_num+1;
+    hi_num=min_num;
+  }
+  srand(time(NULL) - getpid()*2);
+  result = (rand()%(hi_num-low_num))+low_num;
+  return result;
+}
+void releaseMem()
+{
+   if((shmdt(ossClock)) == -1) //detach from shared memory
+   {
+     // perror("Error in shmdt in Child:");
+   }
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d20 2
+d23 1
+a23 1
+clock_share *shareData;
+a25 1
+SlaveID slaveData;
+d37 3
+a39 11
+  int xx = atoi(argv[0]);
+  int shareID = atoi(argv[1]);
+  critMsgID = atoi(argv[2]);
+  dieMsgID = atoi(argv[3]);
+
+  shareData = (clock_share*)shmat(shareID, (void *)0,0); // attaching to shared memory
+    
+  message.mtype = 1;
+  sprintf(message.mtext, "%s\n", "1");
+  slaveData.pid = getpid();
+  //slaveData.time = 
+d41 1
+a41 1
+  if (msgsnd(dieMsgID, &message, sizeof(message.mtext), IPC_NOWAIT) < 0)
+d43 2
+a44 1
+    perror("msgsnd");
+d46 19
+d66 22
+d95 1
+a95 4
+  if((shmdt(shareData)) == -1) //detach from shared memory
+  {
+    perror("Error in shmdt in Child:");
+  }
+d101 1
+a101 5
+  if((shmdt(shareData)) == -1) //detach from shared memory
+  {
+    perror("Error in shmdt in Child:");
+  }
+
+d106 24
+@

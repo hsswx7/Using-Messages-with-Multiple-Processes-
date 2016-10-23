@@ -1,0 +1,239 @@
+head	1.4;
+access;
+symbols;
+locks
+	o1-sangha:1.4; strict;
+comment	@ * @;
+
+
+1.4
+date	2016.10.16.01.34.17;	author o1-sangha;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2016.10.11.21.49.01;	author o1-sangha;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2016.10.10.20.42.56;	author o1-sangha;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2016.10.09.17.02.44;	author o1-sangha;	state Exp;
+branches;
+next	;
+
+
+desc
+@Checking in slave.c
+@
+
+
+1.4
+log
+@Changing this to oss.c
+@
+text
+@#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <getopt.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <time.h>
+#include <signal.h>
+#include <error.h>
+#include <assert.h>
+#include <sys/msg.h>
+#include "share.h"
+
+
+void INThandler(int sig); // for the ctrl^C
+void TimeHandler(int sig); // for alarm (z)
+
+clock_share *shareData;
+message_buf message;
+size_t buf_length;
+SlaveID slaveData;
+
+int shareID;
+int critMsgID;
+int dieMsgID;
+
+int main(int argc, char *argv[])
+{
+  signal(SIGTERM, TimeHandler); // getting is alarm is activated
+  signal(SIGQUIT,INThandler); //getting if ctrl^c called
+  signal(SIGINT, INThandler); 
+  
+  int xx = atoi(argv[0]);
+  int shareID = atoi(argv[1]);
+  critMsgID = atoi(argv[2]);
+  dieMsgID = atoi(argv[3]);
+
+  shareData = (clock_share*)shmat(shareID, (void *)0,0); // attaching to shared memory
+    
+  message.mtype = 1;
+  sprintf(message.mtext, "%s\n", "1");
+  slaveData.pid = getpid();
+  //slaveData.time = 
+  
+  if (msgsnd(dieMsgID, &message, sizeof(message.mtext), IPC_NOWAIT) < 0)
+  {
+    perror("msgsnd");
+  }
+
+  return 0;
+}
+
+void INThandler(int sig)
+{ 
+  signal(sig, SIG_IGN); // ignoring any signal passed to the INThandler
+  fprintf(stderr, "\nCtrl^C Called, Process Exiting\n");
+  if((shmdt(shareData)) == -1) //detach from shared memory
+  {
+    perror("Error in shmdt in Child:");
+  }
+
+  kill(getpid(), SIGKILL);
+}
+void TimeHandler(int sig)
+{
+  if((shmdt(shareData)) == -1) //detach from shared memory
+  {
+    perror("Error in shmdt in Child:");
+  }
+
+  //shmctl(shmid, IPC_RMID, NULL); //mark shared memory for deletion
+  fprintf(stderr, "\nOut of Time, Process %d Exiting\n", getpid());
+  kill(getpid(), SIGKILL);
+  //exit(0);
+}
+@
+
+
+1.3
+log
+@restarting sort off
+@
+text
+@d15 1
+a16 5
+typedef struct Clock
+{
+  int nano;
+  int second;
+}clock_share;
+d18 11
+a28 6
+#define MSGSZ     128
+typedef struct msgbuf 
+{
+  long    mtype;
+  char    mtext[MSGSZ];
+} message_buf;
+d32 21
+a52 1
+  printf("Hello World: %d\n", getpid());
+d54 25
+a78 1
+}@
+
+
+1.2
+log
+@I frogot last time to login
+@
+text
+@d16 5
+a20 3
+int shareID;
+void INThandler(int sig); // for the ctrl^C
+void TimeHandler(int sig); // for alarm (z)
+d22 2
+a23 1
+int main(int argc, char *argv[])
+d25 3
+a27 26
+  signal(SIGTERM, TimeHandler); // getting is alarm is activated
+  signal(SIGQUIT,INThandler); //getting if ctrl^c called
+  signal(SIGINT, INThandler); 
+  
+  int shareID = atoi(argv[0]);
+  key_t key = atoi(argv[1]); // making key for access 
+  
+  typedef struct Clock
+  {
+     int nano;
+	 int second;
+  }clock;
+  
+  
+  if((shareID = shmget(key, sizeof(clock), IPC_CREAT | 0600)) < 0)  // creating the shared memory 
+  {
+	  perror("shmget");
+	  exit(1);
+  }
+  clock *shareData;
+  shareData = (clock*)shmat(shareID, NULL,0);
+  if (shareData->nano ==(int)-1) // Now we attach the segment to our data space.
+  {
+	  perror("Shmat error in Main");
+	  exit(1);
+  }
+d29 1
+a29 20
+  sleep(5);
+  shareData->nano +=1; 
+  printf("Hello World: %d\n",shareData->nano);
+  if((shmdt(shareData)) == -1) //detach from shared memory
+  {
+    perror("Error in shmdt in Child:");
+  }
+}
+
+void INThandler(int sig)
+{ 
+  signal(sig, SIG_IGN); // ignoring any signal passed to the INThandler
+  fprintf(stderr, "\nCtrl^C Called, Process Exiting\n");
+ if((shmctl(shareID, IPC_RMID, NULL)) == -1)//mark shared memory for deletion
+  {
+    //perror("Error In shmdt Child INThandler");
+  }
+  kill(getpid(), SIGKILL);
+}
+void TimeHandler(int sig)
+d31 3
+a33 9
+  if((shmctl(shareID, IPC_RMID, NULL)) == -1)//mark shared memory for deletion
+  {
+    //perror("Error In shmdt Child TimeHandler");
+  }
+  //shmctl(shmid, IPC_RMID, NULL); //mark shared memory for deletion
+  //fprintf(stderr, "\nOut of Time, Process %d Exiting\n", slaveNum+1);
+  kill(getpid(), SIGKILL);
+  //exit(0);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d14 1
+d16 53
+a68 1
+int main()
+d70 8
+a77 2
+  printf("Hello World.\n");
+  return 0;
+@

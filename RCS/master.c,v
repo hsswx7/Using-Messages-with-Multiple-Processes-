@@ -1,0 +1,719 @@
+head	1.4;
+access;
+symbols;
+locks
+	o1-sangha:1.4; strict;
+comment	@ * @;
+
+
+1.4
+date	2016.10.16.01.34.17;	author o1-sangha;	state Exp;
+branches;
+next	1.3;
+
+1.3
+date	2016.10.11.21.48.45;	author o1-sangha;	state Exp;
+branches;
+next	1.2;
+
+1.2
+date	2016.10.10.20.42.56;	author o1-sangha;	state Exp;
+branches;
+next	1.1;
+
+1.1
+date	2016.10.09.17.02.44;	author o1-sangha;	state Exp;
+branches;
+next	;
+
+
+desc
+@Firt time checking in master.c
+@
+
+
+1.4
+log
+@Changing this to user.c
+@
+text
+@#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <getopt.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <time.h>
+#include <signal.h>
+#include <error.h>
+#include <assert.h>
+#include <sys/msg.h>
+#include "share.h"
+
+#define MSGSZ     500
+
+
+void comOptions (int argc, char **argv, int c, int *x,int *z, char **filename, int *hflag, int *hepflag, int *nflag, int *lflag, int *nempty);
+void displayHelpMesg();
+void validate(int *x,int temp,char y);
+void test(int x, int z,char*file);  // this is just to print out put
+void INThandler(int sig);  // handeling Ctrl^C signal
+void on_alarm(int signal);  // handeling the alarm(z) signal
+
+clock_share *shareData;
+message_buf message;
+
+pid_t pidArr[100];
+int x = 5; //Number of slaves 
+int z = 20; //The Seconds time limit on the children running 
+int shareID;  //I made this global so INThandler
+int critMsgFlag;
+int dieMsgFlag;
+int critMsgID;
+int dieMsgID;
+
+int main(int argc, char **argv)
+{
+  signal (SIGINT,INThandler);
+  signal(SIGALRM,on_alarm);
+  
+  int c; // this is for the Switch statement for using getopt
+  char *filename = "test.out";
+  int hepflag =  0; // flags for each command for customized messages
+  int nflag = 0;
+  int lflag = 0;
+  int nempty = 0;
+  int hflag = 0;
+  comOptions(argc,argv,c,&x,&z,&filename, &hflag, &hepflag, &nflag, &lflag,&nempty); // H
+  test(x,z,filename);
+ 
+  alarm(z);
+  
+  key_t key = 1994; // making key for access 
+  key_t dieMsgKey = 1991; // Key for the messages
+  key_t criticalMsgKey = 1989;  //Key for the children to have a critical section
+  
+  if((shareID = shmget(key, sizeof(clock_share), IPC_CREAT | 0600)) < 0)  // creating the shared memory 
+  {
+    perror("shmget");
+    exit(1);
+  }
+
+  shareData = (clock_share*)shmat(shareID, NULL,0);
+  if (shareData->nano ==(int)-1) // Now we attach the segment to our data space.
+  {
+    perror("Shmat error in Main");
+    exit(1);
+  }
+  shareData->nano = 0;
+  shareData->second = 0;
+  
+  critMsgFlag = IPC_CREAT | 0666; //getting ID's for the message que's
+  dieMsgFlag = IPC_CREAT | 0666; // getting ID for the die message 
+  
+  if ((critMsgID = msgget(criticalMsgKey, critMsgFlag)) < 0)
+  {
+    perror("Error in msgeet Master ");
+	exit(1);
+  }
+  if ((dieMsgID = msgget(dieMsgKey, dieMsgFlag)) < 0)
+  {
+    perror("Error in msgeet Master ");
+	exit(1);
+  }
+  
+  char xx[32];
+  sprintf(xx, "%d",x);
+  char shareIDpass[32];
+  sprintf(shareIDpass, "%d",shareID);
+  char keyPass[32];
+  sprintf(keyPass, "%d",key);
+  char dieMsgKeyPass[32];
+  sprintf(dieMsgKeyPass, "%d", dieMsgKey);
+  char criticalMsgKeyPass[32];
+  sprintf(criticalMsgKeyPass, "%d", criticalMsgKey);
+  char critMsgIDPass[32];
+  sprintf(critMsgIDPass, "%d" , critMsgID);
+  char dieMsgIDPass[32];
+  sprintf(dieMsgIDPass, "%d" , dieMsgID);
+  
+  
+  int i = 0;
+  for (i = 0; i < x; i++)
+  { 
+    //sprintf(xx,"%d",i); // processes number
+    pid_t pid = fork();
+
+    if (pid < 0)
+    {
+      perror("Fork() Failed."); 
+      exit(1); 
+    }
+    if (pid == 0)
+    {
+      pidArr[x]=getpid();
+      execl("./user",xx,shareIDpass,critMsgIDPass,dieMsgIDPass,NULL);
+      perror("Child failed to execl");
+    }
+    if (msgrcv(dieMsgID, &message, sizeof(message.mtext), 0, 0) < 0) 
+    {
+      perror("msgrcv");
+      exit(1);
+    }
+    printf("Printing Message : ");
+    printf("%s\n", message.mtext);
+  }
+
+  
+  
+  wait(NULL);
+  // Removing Share Data
+  if((shmdt(shareData)) == -1) //detach from shared memory
+  {
+    perror("Error in shmdt in Parent:");
+  }
+  if((shmctl(shareID, IPC_RMID, NULL)) == -1)//mark shared memory for deletion
+  { 
+    printf("Error in shmclt"); 
+  }	
+  if ((msgctl(dieMsgID, IPC_RMID, NULL) == -1) || (msgctl(critMsgID, IPC_RMID, NULL) == -1))
+  {
+    perror("Erorr in msgctl ");
+  }	  
+
+  
+  return 0;
+}
+
+
+//Functions
+void comOptions (int argc, char **argv , int c, int *x, int *z, char **filename, int *hflag, int *hepflag, int *nflag, int *lflag, int *nempty)
+{ 
+  int temp = 0;
+  static struct option long_options[] = 
+  { 
+    {"help", no_argument, 0, 'p'},
+    { 0,     0          , 0,  0 } 
+  };
+  int long_index = 0;
+
+  while((c = getopt_long_only(argc, argv, "hs:t:l:", long_options, &long_index)) != -1)
+  {
+    switch (c)
+    {
+      case 'h':  // -h
+        *hflag = 1;
+        *nempty = 1; 
+        if (*hepflag ==0) {displayHelpMesg();}
+      break;
+      
+      case 'p':  // -help
+       //printf("help used \n");
+       *hepflag = 1;
+       *nempty = 1;
+       if (*hflag ==0) {displayHelpMesg();}
+      break;
+	  
+      case 's':
+	   temp = *x;
+       *x = atoi(optarg);
+        if (*x > 20)
+	{
+          printf("Inputed: %d is to big. (Limit 20). Reverting back to default 5.\n", *x);
+          *x = temp;
+        }
+	validate(x,temp,'x');
+      break;
+
+      case 't':
+        *nempty = 1;
+	 temp = *z;
+	 *z = atoi(optarg);
+	 validate(z,temp,'z');
+      break;
+
+      case 'l':
+        if (optopt == 'n')
+        {
+          printf("Please enter a valid filename.");
+          return;
+        }
+        //printf("Log file name changed to: %s\n", optarg);
+        *lflag = 1;
+        *nempty = 1;
+        *filename = optarg;
+      break;
+      
+      case '?':
+        if (optopt == 'l')
+        {
+          printf("Command -l requires filename. Ex: -lfilename.txt | -l filename.txt.\n");
+	  exit(0);
+        }
+        else if (optopt == 's')
+        {
+          printf("Commands -s requires int value. Ex: -s213| -s 2132\n");
+	  exit(0);
+        }
+	else if (optopt == 'i')
+	{
+	  printf("Command -y requires int value. Ex: -i213| -i 2132\n");
+	  exit(0);
+	}
+	else if (optopt == 't')
+	{
+	  printf("Command -z requires int value. Ex: -t13| -t 2132\n");
+	  exit(0);	
+	}
+        else
+        {
+          printf("You have used an invalid command, please use -h or -help for command options, closing program.\n"); 
+	  exit(0);
+        }
+      return;
+	  
+      default :
+        if (optopt == 'l')
+        {
+          *lflag = 1;
+          *nempty = 1; 
+          printf ("Please enter filename after -l \n");
+          exit(0);
+        }
+	else if (optopt == 'n')
+        { 
+          printf ("Please enter integer x after -n \n");
+	  *nflag = 1;
+          *nempty = 1;
+        }
+        printf("Running Program without Commands.\n");
+      break;
+    }
+  }
+}
+void validate(int *x,int temp,char y)
+{
+  char *print;
+  char *print2;
+  if (y == 'y')
+  {
+    print = "y";
+    print2 = "-i";
+  } 
+  else if (y == 'z')
+  {
+    print = "z";
+    print2 = "-t";	  
+  }
+  else if (y == 'x')
+  {
+    print = "x";
+    print2 = "-s";	  
+  }
+  
+  
+  if (*x == 0)
+  {
+    printf("Intput invalid for %s changing %s back or default.\n",print2,print);
+    *x = temp;
+  }
+  else if (*x < 0)
+  {
+    printf("Intput invalid for %s changing %s back or default.\n",print2,print);
+    *x = temp; 
+  }
+}
+void displayHelpMesg()
+{
+  printf (" -h or -help  : shows steps on how to use the program \n");
+  printf (" -s x         : x is the maximum number of slave processes spawned (default 5) \n");
+  printf (" -l filename  : change the log file name \n");
+  printf (" -t z         : parameter z is the time in seconds when the master will terminate itself (default 20) \n"); 
+  printf ("\nClosing Program.............\n");
+  exit(0);
+}
+void test (int x,int z, char *file)
+{	
+  printf ("Number of Slaves (x): %d\n", x);
+  printf ("Time limit       (z): %d\n", z);
+  printf ("Filename            : %s\n\n", file);
+}
+void INThandler(int sig)
+{ 
+  signal(sig, SIG_IGN);
+  printf("\nCtrl^C Called. Closing All Process.\n");
+  fflush(stdout);
+  
+  if ((msgctl(dieMsgID, IPC_RMID, NULL) == -1) || (msgctl(critMsgID, IPC_RMID, NULL) == -1))
+  {
+    perror("Erorr in msgctl ");
+  }	
+  if((shmctl(shareID, IPC_RMID, NULL)) == -1)//mark shared memory for deletion
+  {
+    perror ("Error in shmclt parent "); 
+  }
+  int i =0;
+  for (i=0; i<x;i++)
+  {
+    kill(pidArr[x], SIGQUIT);
+  }
+   	
+  
+  exit(0);
+}
+void on_alarm(int signal)
+{
+  printf("Timer of %d seconds is over killing all slave processes.\n", z);
+  int i = 0;
+  if ((msgctl(dieMsgID, IPC_RMID, NULL) == -1) || (msgctl(critMsgID, IPC_RMID, NULL) == -1))
+  {
+    perror("Erorr in msgctl ");
+  }	
+  if((shmctl(shareID, IPC_RMID, NULL)) == -1)//mark shared memory for deletion
+  {
+    perror("Error parent in shmclt ");	  
+  }
+  for (i=0; i<x;i++)
+  {
+    kill(pidArr[x], SIGTERM); // killing em child by children
+  }
+    exit(0);
+}
+@
+
+
+1.3
+log
+@Restarting sort off
+@
+text
+@d15 1
+d17 9
+a25 6
+#define MSGSZ     128
+typedef struct msgbuf 
+{
+  long    mtype;
+  char    mtext[MSGSZ];
+} message_buf;
+d27 2
+a28 5
+typedef struct Clock
+{
+  int nano;
+  int second;
+}clock_share;
+d34 4
+a37 1
+int msqid;
+d41 305
+a345 2
+	
+}@
+
+
+1.2
+log
+@I frogot last time to login
+@
+text
+@d12 2
+d16 12
+a27 6
+void comOptions (int argc, char **argv, int c, int *x,int *z, char **filename, int *hflag, int *hepflag, int *nflag, int *lflag, int *nempty);
+void displayHelpMesg();
+void validate(int *x,int temp,char y);
+void test(int x, int z,char*file);  // this is just to print out put
+void INThandler(int sig);  // handeling Ctrl^C signal
+void on_alarm(int signal);  // handeling the alarm(z) signal
+d33 1
+d37 2
+a38 257
+  signal (SIGINT,INThandler);
+  signal(SIGALRM,on_alarm);
+  int c; // this is for the Switch statement for using getopt
+  char *filename = "test.out";
+  int hepflag =  0; // flags for each command for customized messages
+  int nflag = 0;
+  int lflag = 0;
+  int nempty = 0;
+  int hflag = 0;
+  comOptions(argc,argv,c,&x,&z,&filename, &hflag, &hepflag, &nflag, &lflag,&nempty); // H
+  test(x,z,filename);
+  
+  
+  key_t key = 1994; // making key for access 
+  typedef struct Clock
+  {
+     int nano;
+	 int second;
+  }clock;
+  
+  
+  if((shareID = shmget(key, sizeof(clock), IPC_CREAT | 0600)) < 0)  // creating the shared memory 
+  {
+	  perror("shmget");
+	  exit(1);
+  }
+  clock *shareData;
+  shareData = (clock*)shmat(shareID, NULL,0);
+  if (shareData->nano ==(int)-1) // Now we attach the segment to our data space.
+  {
+	  perror("Shmat error in Main");
+	  exit(1);
+  }
+  shareData->nano = 0;
+  shareData->second = 0;
+  
+  char shareIDpass[32];
+  sprintf(shareIDpass, "%d",shareID);
+  char keyPass[32];
+  sprintf(keyPass, "%d",key);
+  alarm(z);
+
+  int i = 0;
+  for (i = 0; i < x ; i++)
+  { 
+    //sprintf(xx,"%d",i); // processes number
+    pid_t pid = fork();
+
+    if (pid < 0)
+    {
+      perror("Fork() Failed."); 
+      exit(-1); 
+    }
+    if (pid == 0)
+    {
+      pidArr[x]=getpid();
+      execl("./user",shareIDpass,keyPass,NULL);
+      perror("Child failed to execl");
+    }
+		
+  }
+  
+  wait(NULL);
+  if((shmdt(shareData)) == -1) //detach from shared memory
+  {
+    perror("Error in shmdt in Parent:");
+  }
+  if((shmctl(shareID, IPC_RMID, NULL)) == -1)//mark shared memory for deletion
+  { 
+    perror ("Error in shmclt"); 
+  }	
+ 
+  return 0;
+}
+
+// Fucntions 
+void comOptions (int argc, char **argv , int c, int *x, int *z, char **filename, int *hflag, int *hepflag, int *nflag, int *lflag, int *nempty)
+{ 
+  int temp = 0;
+  static struct option long_options[] = 
+  { 
+    {"help", no_argument, 0, 'p'},
+    { 0,     0          , 0,  0 } 
+  };
+  int long_index = 0;
+
+  while((c = getopt_long_only(argc, argv, "hs:t:l:", long_options, &long_index)) != -1)
+  {
+    switch (c)
+    {
+      case 'h':  // -h
+        *hflag = 1;
+        *nempty = 1; 
+        if (*hepflag ==0) {displayHelpMesg();}
+      break;
+      
+      case 'p':  // -help
+       //printf("help used \n");
+       *hepflag = 1;
+       *nempty = 1;
+       if (*hflag ==0) {displayHelpMesg();}
+      break;
+	  *x = atio(optarg);
+        if (*x > 20)
+	{
+          printf("Inputed: %d is to big. (Limit 20). Reverting back to default 5.\n", *x);
+          *x = temp;
+        }
+	validate(x,temp,'x');
+      break;
+
+      case 't':
+        *nempty = 1;
+	 temp = *z;
+	 *z = atoi(optarg);
+	 validate(z,temp,'z');
+      break;
+
+      case 'l':
+        if (optopt == 'n')
+        {
+          printf("Please enter a valid filename.");
+          return;
+        }
+        //printf("Log file name changed to: %s\n", optarg);
+        *lflag = 1;
+        *nempty = 1;
+        *filename = optarg;
+      break;
+      
+      case '?':
+        if (optopt == 'l')
+        {
+          printf("Command -l requires filename. Ex: -lfilename.txt | -l filename.txt.\n");
+		  exit(0);
+        }
+        else if (optopt == 's')
+        {
+          printf("Commands -s requires int value. Ex: -s213| -s 2132\n");
+		  exit(0);
+        }
+	else if (optopt == 'i')
+	{
+		printf("Command -y requires int value. Ex: -i213| -i 2132\n");
+		exit(0);
+	}
+	else if (optopt == 't')
+	{
+		printf("Command -z requires int value. Ex: -t13| -t 2132\n");
+		exit(0);	
+	}
+        else
+        {
+          printf("You have used an invalid command, please use -h or -help for command options, closing program.\n"); 
+		  exit(0);
+        }
+      return;
+	  
+      default :
+        if (optopt == 'l')
+        {
+          *lflag = 1;
+          *nempty = 1; 
+          printf ("Please enter filename after -l \n");
+          exit(0);
+        }
+	else if (optopt == 'n')
+        { 
+          printf ("Please enter integer x after -n \n");
+	  *nflag = 1;
+          *nempty = 1;
+        }
+        printf("Running Program without Commands.\n");
+      break;
+    }
+  }
+}
+void validate(int *x,int temp,char y)
+{
+  char *print;
+  char *print2;
+  if (y == 'y')
+  {
+    print = "y";
+    print2 = "-i";
+  } 
+  else if (y == 'z')
+  {
+    print = "z";
+    print2 = "-t";	  
+  }
+  else if (y == 'x')
+  {
+    print = "x";
+    print2 = "-s";	  
+  }
+  
+  
+  if (*x == 0)
+  {
+    printf("Intput invalid for %s changing %s back or default.\n",print2,print);
+    *x = temp;
+  }
+  else if (*x < 0)
+  {
+    printf("Intput invalid for %s changing %s back or default.\n",print2,print);
+    *x = temp; 
+  }
+}
+void displayHelpMesg()
+{
+  printf (" -h or -help  : shows steps on how to use the program \n");
+  printf (" -s x         : x is the maximum number of slave processes spawned (default 5) \n");
+  printf (" -l filename  : change the log file name \n");
+  printf (" -t z         : parameter z is the time in seconds when the master will terminate itself (default 20) \n"); 
+  printf ("\nClosing Program.............\n");
+  exit(0);
+}
+void test (int x,int z, char *file)
+{	
+  printf ("Number of Slaves (x): %d\n", x);
+  printf ("Time limit       (z): %d\n", z);
+  printf ("Filename            : %s\n\n", file);
+}
+void INThandler(int sig)
+{ 
+  signal(sig, SIG_IGN);
+  printf("\nCtrl^C Called. Closing All Process.\n");
+  fflush(stdout);
+
+  if((shmctl(shareID, IPC_RMID, NULL)) == -1)//mark shared memory for deletion
+  {
+    perror ("Error in shmclt"); 
+  }
+  int i =0;
+  for (i=0; i<x;i++)
+  {
+    kill(pidArr[x], SIGQUIT);
+  }
+   	
+  
+  exit(0);
+}
+void on_alarm(int signal)
+{
+  printf("Timer of %d seconds is over killing all slave processes.\n", z);
+  int i = 0;
+  if((shmctl(shareID, IPC_RMID, NULL)) == -1)//mark shared memory for deletion
+  {
+    perror("Error in shmclt\n");	  
+  }
+  for (i=0; i<x;i++)
+  {
+    kill(pidArr[x], SIGTERM); // killing em child by children
+  }
+    exit(0);
+}
+@
+
+
+1.1
+log
+@Initial revision
+@
+text
+@d12 1
+d18 2
+d21 1
+d24 1
+a24 1
+
+d28 2
+d39 30
+a68 2
+ 
+
+d83 2
+a84 2
+      //pidArr[x]=getpid();
+      execl("./slave",NULL);
+d91 8
+d130 1
+d251 34
+a284 1
+}@
